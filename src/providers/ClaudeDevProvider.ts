@@ -15,7 +15,7 @@ https://github.com/microsoft/vscode-webview-ui-toolkit-samples/blob/main/default
 https://github.com/KumarVariable/vscode-extension-sidebar-html/blob/master/src/customSidebarViewProvider.ts
 */
 
-type SecretKey = "apiKey" | "openRouterApiKey" | "awsAccessKey" | "awsSecretKey"
+type SecretKey = "apiKey" | "openRouterApiKey" | "awsAccessKey" | "awsSecretKey" | "vertexAccessToken" | "customOpenAIApiKey" | "geminiApiKey"
 type GlobalStateKey =
 	| "apiProvider"
 	| "apiModelId"
@@ -24,6 +24,9 @@ type GlobalStateKey =
 	| "lastShownAnnouncementId"
 	| "customInstructions"
 	| "taskHistory"
+	| "vertexProjectId"
+	| "vertexRegion"
+	| "customOpenAIBaseUrl"
 
 export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 	public static readonly sideBarId = "claude-dev.SidebarProvider" // used in package.json as the view's id. This value cannot be changed due to how vscode caches views based on their id, and updating the id would break existing instances of the extension.
@@ -279,7 +282,14 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 								awsAccessKey,
 								awsSecretKey,
 								awsRegion,
+								vertexProjectId,
+								vertexRegion,
+								vertexAccessToken,
+								customOpenAIBaseUrl,
+								customOpenAIApiKey,
+								geminiApiKey,
 							} = message.apiConfiguration
+							
 							await this.updateGlobalState("apiProvider", apiProvider)
 							await this.updateGlobalState("apiModelId", apiModelId)
 							await this.storeSecret("apiKey", apiKey)
@@ -287,6 +297,13 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 							await this.storeSecret("awsAccessKey", awsAccessKey)
 							await this.storeSecret("awsSecretKey", awsSecretKey)
 							await this.updateGlobalState("awsRegion", awsRegion)
+							await this.updateGlobalState("vertexProjectId", vertexProjectId)
+							await this.updateGlobalState("vertexRegion", vertexRegion)
+							await this.storeSecret("vertexAccessToken", vertexAccessToken)
+							await this.updateGlobalState("customOpenAIBaseUrl", customOpenAIBaseUrl)
+							await this.storeSecret("customOpenAIApiKey", customOpenAIApiKey)
+							await this.storeSecret("geminiApiKey", geminiApiKey)
+					
 							this.claudeDev?.updateApi(message.apiConfiguration)
 						}
 						await this.postStateToWebview()
@@ -548,10 +565,16 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 			awsAccessKey,
 			awsSecretKey,
 			awsRegion,
+			vertexProjectId,
+			vertexRegion,
+			vertexAccessToken,
+			customOpenAIBaseUrl,
+			customOpenAIApiKey,
 			maxRequestsPerTask,
 			lastShownAnnouncementId,
 			customInstructions,
 			taskHistory,
+			geminiApiKey,
 		] = await Promise.all([
 			this.getGlobalState("apiProvider") as Promise<ApiProvider | undefined>,
 			this.getGlobalState("apiModelId") as Promise<ApiModelId | undefined>,
@@ -560,10 +583,16 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 			this.getSecret("awsAccessKey") as Promise<string | undefined>,
 			this.getSecret("awsSecretKey") as Promise<string | undefined>,
 			this.getGlobalState("awsRegion") as Promise<string | undefined>,
+			this.getGlobalState("vertexProjectId") as Promise<string | undefined>,
+			this.getGlobalState("vertexRegion") as Promise<string | undefined>,
+			this.getSecret("vertexAccessToken") as Promise<string | undefined>,
+			this.getGlobalState("customOpenAIBaseUrl") as Promise<string | undefined>,
+			this.getSecret("customOpenAIApiKey") as Promise<string | undefined>,
 			this.getGlobalState("maxRequestsPerTask") as Promise<number | undefined>,
 			this.getGlobalState("lastShownAnnouncementId") as Promise<string | undefined>,
 			this.getGlobalState("customInstructions") as Promise<string | undefined>,
 			this.getGlobalState("taskHistory") as Promise<HistoryItem[] | undefined>,
+			this.getSecret("geminiApiKey") as Promise<string | undefined>,
 		])
 
 		let apiProvider: ApiProvider
@@ -589,6 +618,12 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 				awsAccessKey,
 				awsSecretKey,
 				awsRegion,
+				vertexProjectId,
+				vertexRegion,
+				vertexAccessToken,
+				customOpenAIBaseUrl,
+				customOpenAIApiKey,
+				geminiApiKey,
 			},
 			maxRequestsPerTask,
 			lastShownAnnouncementId,

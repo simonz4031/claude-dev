@@ -2,6 +2,20 @@ import { ApiConfiguration } from "../../../src/shared/api"
 
 export function validateApiConfiguration(apiConfiguration?: ApiConfiguration): string | undefined {
 	if (apiConfiguration) {
+		console.log("apiConfiguration details:", {
+			apiProvider: apiConfiguration.apiProvider,
+			apiKey: apiConfiguration.apiKey ? apiConfiguration.apiKey : undefined,
+			awsAccessKey: apiConfiguration.awsAccessKey ? apiConfiguration.awsAccessKey : undefined,
+			awsSecretKey: apiConfiguration.awsSecretKey ? apiConfiguration.awsSecretKey : undefined,
+			awsRegion: apiConfiguration.awsRegion,
+			openRouterApiKey: apiConfiguration.openRouterApiKey ? apiConfiguration.openRouterApiKey : undefined,
+			vertexProjectId: apiConfiguration.vertexProjectId,
+			vertexRegion: apiConfiguration.vertexRegion,
+			vertexAccessToken: apiConfiguration.vertexAccessToken ? apiConfiguration.vertexAccessToken : undefined,
+			customOpenAIBaseUrl: apiConfiguration.customOpenAIBaseUrl,
+			customOpenAIApiKey: apiConfiguration.customOpenAIApiKey ? apiConfiguration.customOpenAIApiKey : undefined,
+			geminiApiKey: apiConfiguration.geminiApiKey ? apiConfiguration.geminiApiKey : undefined,
+		});
 		switch (apiConfiguration.apiProvider) {
 			case "anthropic":
 				if (!apiConfiguration.apiKey) {
@@ -16,6 +30,21 @@ export function validateApiConfiguration(apiConfiguration?: ApiConfiguration): s
 			case "openrouter":
 				if (!apiConfiguration.openRouterApiKey) {
 					return "You must provide a valid API key or choose a different provider."
+				}
+				break
+			case "vertex":
+				if ( !apiConfiguration.vertexProjectId || !apiConfiguration.vertexRegion || !apiConfiguration.vertexAccessToken) {
+					return "You must provide a valid Vertex access token, project ID, and region."
+				}
+				break
+			case "customOpenAI":
+				if ( !apiConfiguration.customOpenAIBaseUrl || !apiConfiguration.customOpenAIApiKey ) {
+					return "You must provide a valid API key and base URL."
+				}
+				break
+			case "gemini":
+				if (!apiConfiguration.geminiApiKey) {
+					return "You must provide a valid Google Gemini API key."
 				}
 				break
 		}
