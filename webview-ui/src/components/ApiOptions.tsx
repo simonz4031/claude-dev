@@ -17,16 +17,17 @@ import {
 	customOpenAIDefaultModelId,
 	customOpenAIModels,
 } from "../../../src/shared/api"
+import { useExtensionState } from "../context/ExtensionStateContext"
 
 interface ApiOptionsProps {
 	showModelOptions: boolean
-	apiConfiguration?: ApiConfiguration
-	setApiConfiguration: React.Dispatch<React.SetStateAction<ApiConfiguration | undefined>>
+	apiErrorMessage?: string
 }
 
-const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfiguration, setApiConfiguration }) => {
+const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiErrorMessage }) => {
+	const { apiConfiguration, setApiConfiguration } = useExtensionState()
 	const handleInputChange = (field: keyof ApiConfiguration) => (event: any) => {
-		setApiConfiguration((prev) => ({ ...prev, [field]: event.target.value }))
+		setApiConfiguration({ ...apiConfiguration, [field]: event.target.value })
 	}
 
 	const { selectedProvider, selectedModelId, selectedModelInfo } = useMemo(() => {
@@ -75,7 +76,7 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfigurat
 					<VSCodeOption value="anthropic">Anthropic</VSCodeOption>
 					<VSCodeOption value="bedrock">AWS Bedrock</VSCodeOption>
 					<VSCodeOption value="openrouter">OpenRouter</VSCodeOption>
-					<VSCodeOption value="vertex">Vertex AI</VSCodeOption>
+					<VSCodeOption value="vertex">GCP Vertex AI</VSCodeOption>
 					<VSCodeOption value="customOpenAI">Custom OpenAI</VSCodeOption>
 					<VSCodeOption value="gemini">Google Gemini</VSCodeOption>
 				</VSCodeDropdown>
@@ -86,6 +87,7 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfigurat
 					<VSCodeTextField
 						value={apiConfiguration?.apiKey || ""}
 						style={{ width: "100%" }}
+						type="password"
 						onInput={handleInputChange("apiKey")}
 						placeholder="Enter API Key...">
 						<span style={{ fontWeight: 500 }}>Anthropic API Key</span>
@@ -109,6 +111,7 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfigurat
 					<VSCodeTextField
 						value={apiConfiguration?.openRouterApiKey || ""}
 						style={{ width: "100%" }}
+						type="password"
 						onInput={handleInputChange("openRouterApiKey")}
 						placeholder="Enter API Key...">
 						<span style={{ fontWeight: 500 }}>OpenRouter API Key</span>
@@ -136,6 +139,7 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfigurat
 					<VSCodeTextField
 						value={apiConfiguration?.awsAccessKey || ""}
 						style={{ width: "100%" }}
+						type="password"
 						onInput={handleInputChange("awsAccessKey")}
 						placeholder="Enter Access Key...">
 						<span style={{ fontWeight: 500 }}>AWS Access Key</span>
@@ -143,6 +147,7 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfigurat
 					<VSCodeTextField
 						value={apiConfiguration?.awsSecretKey || ""}
 						style={{ width: "100%" }}
+						type="password"
 						onInput={handleInputChange("awsSecretKey")}
 						placeholder="Enter Secret Key...">
 						<span style={{ fontWeight: 500 }}>AWS Secret Key</span>
@@ -196,7 +201,7 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfigurat
 				</div>
 			)}
 
-			{selectedProvider === "vertex" && (
+			{apiConfiguration?.apiProvider === "vertex" && (
 				<div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
 					<VSCodeTextField
 						value={apiConfiguration?.vertexProjectId || ""}
@@ -205,116 +210,137 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiConfigurat
 						placeholder="Enter Project ID...">
 						<span style={{ fontWeight: 500 }}>Google Cloud Project ID</span>
 					</VSCodeTextField>
-					<VSCodeTextField
-						value={apiConfiguration?.vertexRegion || ""}
-						style={{ width: "100%" }}
-						onInput={handleInputChange("vertexRegion")}
-						placeholder="Enter Region.(default: us-east5)">
-						<span style={{ fontWeight: 500 }}>Google Cloud Region</span>
-					</VSCodeTextField>
-					<VSCodeTextField
-						value={apiConfiguration?.vertexAccessToken || ""}
-						style={{ width: "100%" }}
-						onInput={handleInputChange("vertexAccessToken")}
-						placeholder="Enter Access Token...">
-						<span style={{ fontWeight: 500 }}>Google Cloud Access Token</span>
-					</VSCodeTextField>
+					<div className="dropdown-container">
+						<label htmlFor="vertex-region-dropdown">
+							<span style={{ fontWeight: 500 }}>Google Cloud Region</span>
+						</label>
+						<VSCodeDropdown
+							id="vertex-region-dropdown"
+							value={apiConfiguration?.vertexRegion || ""}
+							style={{ width: "100%" }}
+							onChange={handleInputChange("vertexRegion")}>
+							<VSCodeOption value="">Select a region...</VSCodeOption>
+							<VSCodeOption value="us-east5">us-east5</VSCodeOption>
+							<VSCodeOption value="us-central1">us-central1</VSCodeOption>
+							<VSCodeOption value="europe-west1">europe-west1</VSCodeOption>
+							<VSCodeOption value="europe-west4">europe-west4</VSCodeOption>
+							<VSCodeOption value="asia-southeast1">asia-southeast1</VSCodeOption>
+						</VSCodeDropdown>
+					</div>
 					<p
 						style={{
 							fontSize: "12px",
 							marginTop: "5px",
 							color: "var(--vscode-descriptionForeground)",
 						}}>
-						These details are stored locally and only used to make API requests from this extension.
+						To use Google Cloud Vertex AI, you need to
 						<VSCodeLink
-							href="https://cloud.google.com/vertex-ai/docs/start/cloud-environment"
+							href="https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/use-claude#before_you_begin"
 							style={{ display: "inline" }}>
-							You can find your Google Cloud Project ID and Region here.
+							{
+								"1) create a Google Cloud account › enable the Vertex AI API › enable the desired Claude models,"
+							}
+						</VSCodeLink>{" "}
+						<VSCodeLink
+							href="https://cloud.google.com/docs/authentication/provide-credentials-adc#google-idp"
+							style={{ display: "inline" }}>
+							{"2) install the Google Cloud CLI › configure Application Default Credentials."}
 						</VSCodeLink>
 					</p>
 				</div>
-			)}
+			)}{selectedProvider === "customOpenAI" && (
+			<div>
+				<VSCodeTextField
+					value={apiConfiguration?.customOpenAIBaseUrl || ""}
+					style={{ width: "100%" }}
+					onInput={handleInputChange("customOpenAIBaseUrl")}
+					placeholder="Enter API Base URL...">
+					<span style={{ fontWeight: 500 }}>Custom OpenAI Base URL</span>
+				</VSCodeTextField>
+				<VSCodeTextField
+					value={apiConfiguration?.customOpenAIApiKey || ""}
+					style={{ width: "100%", marginTop: "10px" }}
+					onInput={handleInputChange("customOpenAIApiKey")}
+					placeholder="Enter API Key...">
+					<span style={{ fontWeight: 500 }}>Custom OpenAI API Key</span>
+				</VSCodeTextField>
+				<p style={{
+					fontSize: "12px",
+					marginTop: "5px",
+					color: "var(--vscode-descriptionForeground)",
+				}}>
+					These settings are stored locally and only used to make API requests from this extension.
+				</p>
+			</div>
+		)}
 
-			{selectedProvider === "customOpenAI" && (
-				<div>
-					<VSCodeTextField
-						value={apiConfiguration?.customOpenAIBaseUrl || ""}
-						style={{ width: "100%" }}
-						onInput={handleInputChange("customOpenAIBaseUrl")}
-						placeholder="Enter API Base URL...">
-						<span style={{ fontWeight: 500 }}>Custom OpenAI Base URL</span>
-					</VSCodeTextField>
-					<VSCodeTextField
-						value={apiConfiguration?.customOpenAIApiKey || ""}
-						style={{ width: "100%", marginTop: "10px" }}
-						onInput={handleInputChange("customOpenAIApiKey")}
-						placeholder="Enter API Key...">
-						<span style={{ fontWeight: 500 }}>Custom OpenAI API Key</span>
-					</VSCodeTextField>
-					<p style={{
+		{selectedProvider === "gemini" && (
+			<div>
+				<VSCodeTextField
+					value={apiConfiguration?.geminiApiKey || ""}
+					style={{ width: "100%" }}
+					onInput={handleInputChange("geminiApiKey")}
+					placeholder="Enter API Key...">
+					<span style={{ fontWeight: 500 }}>Google Gemini API Key</span>
+				</VSCodeTextField>
+				<p
+					style={{
 						fontSize: "12px",
 						marginTop: "5px",
 						color: "var(--vscode-descriptionForeground)",
 					}}>
-						These settings are stored locally and only used to make API requests from this extension.
-					</p>
-				</div>
-			)}
+					This key is stored locally and only used to make API requests from this extension.
+					<VSCodeLink href="https://makersuite.google.com/app/apikey" style={{ display: "inline" }}>
+						You can get a Google Gemini API key here.
+					</VSCodeLink>
+				</p>
+			</div>
+		)}
 
-			{selectedProvider === "gemini" && (
-				<div>
-					<VSCodeTextField
-						value={apiConfiguration?.geminiApiKey || ""}
-						style={{ width: "100%" }}
-						onInput={handleInputChange("geminiApiKey")}
-						placeholder="Enter API Key...">
-						<span style={{ fontWeight: 500 }}>Google Gemini API Key</span>
-					</VSCodeTextField>
-					<p
-						style={{
-							fontSize: "12px",
-							marginTop: "5px",
-							color: "var(--vscode-descriptionForeground)",
-						}}>
-						This key is stored locally and only used to make API requests from this extension.
-						<VSCodeLink href="https://makersuite.google.com/app/apikey" style={{ display: "inline" }}>
-							You can get a Google Gemini API key here.
-						</VSCodeLink>
-					</p>
-				</div>
-			)}
 
-			{showModelOptions && (
-				<>
-					<div className="dropdown-container">
-						<label htmlFor="model-id">
-							<span style={{ fontWeight: 500 }}>Model</span>
-						</label>
-						{selectedProvider === "anthropic" && createDropdown(anthropicModels)}
-						{selectedProvider === "openrouter" && createDropdown(openRouterModels)}
-						{selectedProvider === "bedrock" && createDropdown(bedrockModels)}
+		{apiErrorMessage && (
+			<p
+				style={{
+					margin: "-10px 0 4px 0",
+					fontSize: 12,
+					color: "var(--vscode-errorForeground)",
+				}}>
+				{apiErrorMessage}
+			</p>
+		)}
+
+
+		{showModelOptions && (
+			<>
+				<div className="dropdown-container">
+					<label htmlFor="model-id">
+						<span style={{ fontWeight: 500 }}>Model</span>
+					</label>
+					{selectedProvider === "anthropic" && createDropdown(anthropicModels)}
+					{selectedProvider === "openrouter" && createDropdown(openRouterModels)}
+					{selectedProvider === "bedrock" && createDropdown(bedrockModels)}
 						{selectedProvider === "vertex" && createDropdown(vertexModels)}
 						{selectedProvider === "customOpenAI" && createDropdown(customOpenAIModels)}
 						{selectedProvider === "gemini" && createDropdown(geminiModels)}
-					</div>
+				</div>
 
-					<ModelInfoView modelInfo={selectedModelInfo} />
-				</>
-			)}
+				<ModelInfoView modelInfo={selectedModelInfo} />
+			</>
+		)}
 		</div>
 	)
 }
 
-const ModelInfoView = ({ modelInfo }: { modelInfo: ModelInfo }) => {
-	const formatPrice = (price: number) => {
-		return new Intl.NumberFormat("en-US", {
-			style: "currency",
-			currency: "USD",
-			minimumFractionDigits: 2,
-			maximumFractionDigits: 2,
-		}).format(price)
-	}
+export const formatPrice = (price: number) => {
+	return new Intl.NumberFormat("en-US", {
+		style: "currency",
+		currency: "USD",
+		minimumFractionDigits: 2,
+		maximumFractionDigits: 2,
+	}).format(price)
+}
 
+const ModelInfoView = ({ modelInfo }: { modelInfo: ModelInfo }) => {
 	return (
 		<p style={{ fontSize: "12px", marginTop: "2px", color: "var(--vscode-descriptionForeground)" }}>
 			<ModelInfoSupportsItem
@@ -400,7 +426,6 @@ export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 		case "bedrock":
 			return getProviderData(bedrockModels, bedrockDefaultModelId)
 		case "vertex":
-			// Assuming you have vertexModels and vertexDefaultModelId defined
 			return getProviderData(vertexModels, vertexDefaultModelId)
 		case "customOpenAI":
 			return getProviderData(customOpenAIModels, customOpenAIDefaultModelId)

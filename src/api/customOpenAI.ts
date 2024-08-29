@@ -1,6 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import OpenAI from "openai"
-import { ApiHandler, withoutImageData } from "."
+import { ApiHandler, ApiHandlerMessageResponse } from "."
 import {
     ApiHandlerOptions,
     ModelInfo,
@@ -8,6 +8,9 @@ import {
     CustomOpenAIModelId,
     customOpenAIModels,
 } from "../shared/api"
+
+// Temporary placeholder for withoutImageData function
+const withoutImageData = (content: any) => content;
 
 export class CustomOpenAIHandler implements ApiHandler {
     private options: ApiHandlerOptions
@@ -26,7 +29,7 @@ export class CustomOpenAIHandler implements ApiHandler {
         systemPrompt: string,
         messages: Anthropic.Messages.MessageParam[],
         tools: Anthropic.Messages.Tool[]
-    ): Promise<Anthropic.Messages.Message> {
+    ): Promise<ApiHandlerMessageResponse> {
         const openAiMessages = this.convertToOpenAiMessages(messages)
 
         const openAiTools: OpenAI.Chat.ChatCompletionTool[] = tools.map((tool) => ({
@@ -103,7 +106,8 @@ export class CustomOpenAIHandler implements ApiHandler {
                 )
             }
 
-            return anthropicMessage
+            // Return the correct type
+            return { message: anthropicMessage }
         } catch (error) {
             console.error("Error calling DeepSeek API:", error)
             if (error instanceof OpenAI.APIError) {

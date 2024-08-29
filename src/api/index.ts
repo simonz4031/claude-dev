@@ -7,12 +7,17 @@ import { VertexHandler } from "./vertex"
 import { CustomOpenAIHandler } from "./customOpenAI"
 import { GeminiHandler } from "./gemini"
 
+export interface ApiHandlerMessageResponse {
+	message: Anthropic.Messages.Message
+	userCredits?: number
+}
+
 export interface ApiHandler {
 	createMessage(
 		systemPrompt: string,
 		messages: Anthropic.Messages.MessageParam[],
 		tools: Anthropic.Messages.Tool[]
-	): Promise<Anthropic.Messages.Message>
+	): Promise<ApiHandlerMessageResponse>
 
 	createUserReadableRequest(
 		userContent: Array<

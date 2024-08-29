@@ -17,7 +17,9 @@ export interface ExtensionState {
 	apiConfiguration?: ApiConfiguration
 	maxRequestsPerTask?: number
 	customInstructions?: string
+	alwaysAllowReadOnly?: boolean
 	themeName?: string
+	uriScheme?: string
 	claudeMessages: ClaudeMessage[]
 	taskHistory: HistoryItem[]
 	shouldShowAnnouncement: boolean
@@ -53,6 +55,7 @@ export type ClaudeSay =
 	| "user_feedback"
 	| "api_req_retried"
 	| "command_output"
+	| "tool"
 
 export interface ClaudeSayTool {
 	tool:

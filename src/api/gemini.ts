@@ -1,5 +1,5 @@
 import { Anthropic } from "@anthropic-ai/sdk"
-import { ApiHandler, withoutImageData } from "."
+import { ApiHandler, ApiHandlerMessageResponse } from "."
 import {
     ApiHandlerOptions,
     ModelInfo,
@@ -7,7 +7,10 @@ import {
     GeminiModelId,
     geminiModels,
 } from "../shared/api"
-import { GoogleGenerativeAI, GenerativeModel, GenerationConfig } from "@google/generative-ai"
+import { GoogleGenerativeAI, GenerativeModel } from "@google/generative-ai"  // Add this import
+
+// Temporary placeholder for withoutImageData function
+const withoutImageData = (content: any) => content;
 
 export class GeminiHandler implements ApiHandler {
     private options: ApiHandlerOptions
@@ -24,18 +27,43 @@ export class GeminiHandler implements ApiHandler {
         systemPrompt: string,
         messages: Anthropic.Messages.MessageParam[],
         tools: Anthropic.Messages.Tool[]
-    ): Promise<Anthropic.Messages.Message> {
-        const chat = this.model.startChat({
-            history: this.convertToGeminiMessages(messages),
-            generationConfig: {
-                maxOutputTokens: this.getModel().info.maxTokens,
-            },
-        })
+    ): Promise<ApiHandlerMessageResponse> {
+        try {
+            const chat = this.model.startChat({
+                history: this.convertToGeminiMessages(messages),
+                generationConfig: {
+                    maxOutputTokens: this.getModel().info.maxTokens,
+                },
+            })
 
-        const result = await chat.sendMessage(systemPrompt)
-        const response = await result.response
+            const result = await chat.sendMessage(systemPrompt)
+            const response = await result.response
 
-        return this.convertToAnthropicMessage(response)
+            const anthropicMessage: Anthropic.Messages.Message = {
+                id: `gemini-${Date.now()}`,
+                type: "message",
+                role: "assistant",
+                content: [
+                    {
+                        type: "text",
+                        text: response.text(),
+                    },
+                ],
+                model: this.getModel().id,
+                stop_reason: null,
+                stop_sequence: null,
+                usage: {
+                    input_tokens: 0, // Gemini doesn't provide token usage information
+                    output_tokens: 0,
+                },
+            }
+
+            // Return the correct type
+            return { message: anthropicMessage }
+        } catch (error) {
+            console.error("Error calling Gemini API:", error)
+            throw error  // Re-throw the error after logging
+        }
     }
 
     createUserReadableRequest(
