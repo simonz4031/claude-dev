@@ -7,7 +7,7 @@ import { COMMAND_OUTPUT_STRING } from "../../../src/shared/combineCommandSequenc
 import { SyntaxHighlighterStyle } from "../utils/getSyntaxHighlighterStyleFromTheme"
 import CodeBlock from "./CodeBlock"
 import Thumbnails from "./Thumbnails"
-import { ApiProvider } from "../../../src/shared/api"
+import Terminal from "./Terminal"
 
 interface ChatRowProps {
 	message: ClaudeMessage
@@ -16,7 +16,7 @@ interface ChatRowProps {
 	onToggleExpand: () => void
 	lastModifiedMessage?: ClaudeMessage
 	isLast: boolean
-	apiProvider?: ApiProvider
+	handleSendStdin: (text: string) => void
 }
 
 const ChatRow: React.FC<ChatRowProps> = ({
@@ -26,7 +26,7 @@ const ChatRow: React.FC<ChatRowProps> = ({
 	onToggleExpand,
 	lastModifiedMessage,
 	isLast,
-	apiProvider,
+	handleSendStdin,
 }) => {
 	const cost = message.text != null && message.say === "api_req_started" ? JSON.parse(message.text).cost : undefined
 	const apiRequestFailedMessage =
@@ -39,7 +39,7 @@ const ChatRow: React.FC<ChatRowProps> = ({
 	const getIconAndTitle = (type: ClaudeAsk | ClaudeSay | undefined): [JSX.Element | null, JSX.Element | null] => {
 		const normalColor = "var(--vscode-foreground)"
 		const errorColor = "var(--vscode-errorForeground)"
-		const successColor = "var(--vscode-testing-iconPassed)"
+		const successColor = "var(--vscode-charts-green)"
 
 		const ProgressIndicator = (
 			<div
@@ -57,13 +57,6 @@ const ChatRow: React.FC<ChatRowProps> = ({
 		)
 
 		switch (type) {
-			case "request_limit_reached":
-				return [
-					<span
-						className="codicon codicon-error"
-						style={{ color: errorColor, marginBottom: "-1.5px" }}></span>,
-					<span style={{ color: errorColor, fontWeight: "bold" }}>Max Requests Reached</span>,
-				]
 			case "error":
 				return [
 					<span
@@ -338,6 +331,35 @@ const ChatRow: React.FC<ChatRowProps> = ({
 								)}
 							</div>
 						)
+					case "user_feedback_diff":
+						const tool = JSON.parse(message.text || "{}") as ClaudeSayTool
+						return (
+							<div
+								style={{
+									backgroundColor: "var(--vscode-editor-inactiveSelectionBackground)",
+									borderRadius: "3px",
+									padding: "8px",
+									whiteSpace: "pre-line",
+									wordWrap: "break-word",
+								}}>
+								<span
+									style={{
+										display: "block",
+										fontStyle: "italic",
+										marginBottom: "8px",
+										opacity: 0.8,
+									}}>
+									The user made the following changes:
+								</span>
+								<CodeBlock
+									diff={tool.diff!}
+									path={tool.path!}
+									syntaxHighlighterStyle={syntaxHighlighterStyle}
+									isExpanded={isExpanded}
+									onToggleExpand={onToggleExpand}
+								/>
+							</div>
+						)
 					case "error":
 						return (
 							<>
@@ -357,7 +379,7 @@ const ChatRow: React.FC<ChatRowProps> = ({
 									{icon}
 									{title}
 								</div>
-								<div style={{ color: "var(--vscode-testing-iconPassed)" }}>
+								<div style={{ color: "var(--vscode-charts-green)" }}>
 									{renderMarkdown(message.text)}
 								</div>
 							</>
@@ -381,16 +403,6 @@ const ChatRow: React.FC<ChatRowProps> = ({
 				switch (message.ask) {
 					case "tool":
 						return renderTool(message, headerStyle)
-					case "request_limit_reached":
-						return (
-							<>
-								<div style={headerStyle}>
-									{icon}
-									{title}
-								</div>
-								<p style={{ ...pStyle, color: "var(--vscode-errorForeground)" }}>{message.text}</p>
-							</>
-						)
 					case "command":
 						const splitMessage = (text: string) => {
 							const outputIndex = text.indexOf(COMMAND_OUTPUT_STRING)
@@ -399,7 +411,7 @@ const ChatRow: React.FC<ChatRowProps> = ({
 							}
 							return {
 								command: text.slice(0, outputIndex).trim(),
-								output: text.slice(outputIndex + COMMAND_OUTPUT_STRING.length).trim(),
+								output: text.slice(outputIndex + COMMAND_OUTPUT_STRING.length).trim() + " ",
 							}
 						}
 
@@ -410,32 +422,11 @@ const ChatRow: React.FC<ChatRowProps> = ({
 									{icon}
 									{title}
 								</div>
-								<div>
-									<div>
-										<CodeBlock
-											code={command}
-											language="shell-session"
-											syntaxHighlighterStyle={syntaxHighlighterStyle}
-											isExpanded={isExpanded}
-											onToggleExpand={onToggleExpand}
-										/>
-									</div>
-
-									{output && (
-										<>
-											<p style={{ ...pStyle, margin: "10px 0 10px 0" }}>
-												{COMMAND_OUTPUT_STRING}
-											</p>
-											<CodeBlock
-												code={output}
-												language="shell-session"
-												syntaxHighlighterStyle={syntaxHighlighterStyle}
-												isExpanded={isExpanded}
-												onToggleExpand={onToggleExpand}
-											/>
-										</>
-									)}
-								</div>
+								<Terminal
+									rawOutput={command + (output ? "\n" + output : "")}
+									handleSendStdin={handleSendStdin}
+									shouldAllowInput={!!isCommandExecuting && output.length > 0}
+								/>
 							</>
 						)
 					case "completion_result":
@@ -446,7 +437,7 @@ const ChatRow: React.FC<ChatRowProps> = ({
 										{icon}
 										{title}
 									</div>
-									<div style={{ color: "var(--vscode-testing-iconPassed)" }}>
+									<div style={{ color: "var(--vscode-charts-green)" }}>
 										{renderMarkdown(message.text)}
 									</div>
 								</div>
@@ -571,20 +562,47 @@ const ChatRow: React.FC<ChatRowProps> = ({
 						/>
 					</>
 				)
-			case "viewSourceCodeDefinitionsTopLevel":
+			case "listCodeDefinitionNames":
 				return (
 					<>
 						<div style={headerStyle}>
 							{toolIcon("file-code")}
 							<span style={{ fontWeight: "bold" }}>
 								{message.type === "ask"
-									? "Claude wants to view source code definitions in files at the top level of this directory:"
-									: "Claude viewed source code definitions in files at the top level of this directory:"}
+									? "Claude wants to view source code definition names used in this directory:"
+									: "Claude viewed source code definition names used in this directory:"}
 							</span>
 						</div>
 						<CodeBlock
 							code={tool.content!}
 							path={tool.path!}
+							syntaxHighlighterStyle={syntaxHighlighterStyle}
+							isExpanded={isExpanded}
+							onToggleExpand={onToggleExpand}
+						/>
+					</>
+				)
+			case "searchFiles":
+				return (
+					<>
+						<div style={headerStyle}>
+							{toolIcon("search")}
+							<span style={{ fontWeight: "bold" }}>
+								{message.type === "ask" ? (
+									<>
+										Claude wants to search this directory for <code>{tool.regex}</code>:
+									</>
+								) : (
+									<>
+										Claude searched this directory for <code>{tool.regex}</code>:
+									</>
+								)}
+							</span>
+						</div>
+						<CodeBlock
+							code={tool.content!}
+							path={tool.path! + (tool.filePattern ? `/(${tool.filePattern})` : "")}
+							language="plaintext"
 							syntaxHighlighterStyle={syntaxHighlighterStyle}
 							isExpanded={isExpanded}
 							onToggleExpand={onToggleExpand}

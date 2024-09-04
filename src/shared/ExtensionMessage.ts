@@ -15,7 +15,6 @@ export interface ExtensionMessage {
 export interface ExtensionState {
 	version: string
 	apiConfiguration?: ApiConfiguration
-	maxRequestsPerTask?: number
 	customInstructions?: string
 	alwaysAllowReadOnly?: boolean
 	themeName?: string
@@ -35,7 +34,6 @@ export interface ClaudeMessage {
 }
 
 export type ClaudeAsk =
-	| "request_limit_reached"
 	| "followup"
 	| "command"
 	| "command_output"
@@ -53,6 +51,7 @@ export type ClaudeSay =
 	| "text"
 	| "completion_result"
 	| "user_feedback"
+	| "user_feedback_diff"
 	| "api_req_retried"
 	| "command_output"
 	| "tool"
@@ -64,8 +63,11 @@ export interface ClaudeSayTool {
 		| "readFile"
 		| "listFilesTopLevel"
 		| "listFilesRecursive"
-		| "viewSourceCodeDefinitionsTopLevel"
+		| "listCodeDefinitionNames"
+		| "searchFiles"
 	path?: string
 	diff?: string
 	content?: string
+	regex?: string
+	filePattern?: string
 }

@@ -22,7 +22,6 @@ type GlobalStateKey =
 	| "awsRegion"
 	| "vertexProjectId"
 	| "vertexRegion"
-	| "maxRequestsPerTask"
 	| "lastShownAnnouncementId"
 	| "customInstructions"
 	| "alwaysAllowReadOnly"
@@ -35,7 +34,7 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 	private disposables: vscode.Disposable[] = []
 	private view?: vscode.WebviewView | vscode.WebviewPanel
 	private claudeDev?: ClaudeDev
-	private latestAnnouncementId = "aug-28-2024" // update to some unique identifier when we add a new announcement
+	private latestAnnouncementId = "sep-2-2024" // update to some unique identifier when we add a new announcement
 
 	constructor(readonly context: vscode.ExtensionContext, private readonly outputChannel: vscode.OutputChannel) {
 		this.outputChannel.appendLine("ClaudeDevProvider instantiated")
@@ -167,25 +166,16 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 
 	async initClaudeDevWithTask(task?: string, images?: string[]) {
 		await this.clearTask() // ensures that an exising task doesn't exist before starting a new one, although this shouldn't be possible since user must clear task before starting a new one
-		const { maxRequestsPerTask, apiConfiguration, customInstructions, alwaysAllowReadOnly } = await this.getState()
-		this.claudeDev = new ClaudeDev(
-			this,
-			apiConfiguration,
-			maxRequestsPerTask,
-			customInstructions,
-			alwaysAllowReadOnly,
-			task,
-			images
-		)
+		const { apiConfiguration, customInstructions, alwaysAllowReadOnly } = await this.getState()
+		this.claudeDev = new ClaudeDev(this, apiConfiguration, customInstructions, alwaysAllowReadOnly, task, images)
 	}
 
 	async initClaudeDevWithHistoryItem(historyItem: HistoryItem) {
 		await this.clearTask()
-		const { maxRequestsPerTask, apiConfiguration, customInstructions, alwaysAllowReadOnly } = await this.getState()
+		const { apiConfiguration, customInstructions, alwaysAllowReadOnly } = await this.getState()
 		this.claudeDev = new ClaudeDev(
 			this,
 			apiConfiguration,
-			maxRequestsPerTask,
 			customInstructions,
 			alwaysAllowReadOnly,
 			undefined,
@@ -338,18 +328,6 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 						}
 						await this.postStateToWebview()
 						break
-					case "maxRequestsPerTask":
-						let result: number | undefined = undefined
-						if (message.text && message.text.trim()) {
-							const num = Number(message.text)
-							if (!isNaN(num)) {
-								result = num
-							}
-						}
-						await this.updateGlobalState("maxRequestsPerTask", result)
-						this.claudeDev?.updateMaxRequestsPerTask(result)
-						await this.postStateToWebview()
-						break
 					case "customInstructions":
 						// User may be clearing the field
 						await this.updateGlobalState("customInstructions", message.text || undefined)
@@ -496,18 +474,11 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 	}
 
 	async getStateToPostToWebview() {
-		const {
-			apiConfiguration,
-			maxRequestsPerTask,
-			lastShownAnnouncementId,
-			customInstructions,
-			alwaysAllowReadOnly,
-			taskHistory,
-		} = await this.getState()
+		const { apiConfiguration, lastShownAnnouncementId, customInstructions, alwaysAllowReadOnly, taskHistory } =
+			await this.getState()
 		return {
 			version: this.context.extension?.packageJSON?.version ?? "",
 			apiConfiguration,
-			maxRequestsPerTask,
 			customInstructions,
 			alwaysAllowReadOnly,
 			themeName: vscode.workspace.getConfiguration("workbench").get<string>("colorTheme"),
@@ -615,13 +586,12 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 			awsRegion,
 			vertexProjectId,
 			vertexRegion,
-			customOpenAIBaseUrl,
-			customOpenAIApiKey,
-			maxRequestsPerTask,
 			lastShownAnnouncementId,
 			customInstructions,
 			alwaysAllowReadOnly,
 			taskHistory,
+			customOpenAIBaseUrl,
+			customOpenAIApiKey,
 			geminiApiKey,
 		] = await Promise.all([
 			this.getGlobalState("apiProvider") as Promise<ApiProvider | undefined>,
@@ -633,13 +603,12 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 			this.getGlobalState("awsRegion") as Promise<string | undefined>,
 			this.getGlobalState("vertexProjectId") as Promise<string | undefined>,
 			this.getGlobalState("vertexRegion") as Promise<string | undefined>,
-			this.getGlobalState("customOpenAIBaseUrl") as Promise<string | undefined>,
-			this.getSecret("customOpenAIApiKey") as Promise<string | undefined>,
-			this.getGlobalState("maxRequestsPerTask") as Promise<number | undefined>,
 			this.getGlobalState("lastShownAnnouncementId") as Promise<string | undefined>,
 			this.getGlobalState("customInstructions") as Promise<string | undefined>,
 			this.getGlobalState("alwaysAllowReadOnly") as Promise<boolean | undefined>,
 			this.getGlobalState("taskHistory") as Promise<HistoryItem[] | undefined>,
+			this.getGlobalState("customOpenAIBaseUrl") as Promise<string | undefined>,
+			this.getSecret("customOpenAIApiKey") as Promise<string | undefined>,
 			this.getSecret("geminiApiKey") as Promise<string | undefined>,
 		])
 
@@ -672,7 +641,6 @@ export class ClaudeDevProvider implements vscode.WebviewViewProvider {
 				customOpenAIApiKey,
 				geminiApiKey,
 			},
-			maxRequestsPerTask,
 			lastShownAnnouncementId,
 			customInstructions,
 			alwaysAllowReadOnly: alwaysAllowReadOnly ?? false,

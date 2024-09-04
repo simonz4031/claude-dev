@@ -1,5 +1,6 @@
 import { Anthropic } from "@anthropic-ai/sdk"
 import defaultShell from "default-shell"
+import delay from "delay"
 import * as diff from "diff"
 import { execa, ExecaError, ResultPromise } from "execa"
 import fs from "fs/promises"
@@ -11,24 +12,25 @@ import { serializeError } from "serialize-error"
 import treeKill from "tree-kill"
 import * as vscode from "vscode"
 import { ApiHandler, buildApiHandler } from "./api"
-import { listFiles, parseSourceCodeForDefinitionsTopLevel } from "./parse-source-code"
+import { LIST_FILES_LIMIT, listFiles, parseSourceCodeForDefinitionsTopLevel } from "./parse-source-code"
 import { ClaudeDevProvider } from "./providers/ClaudeDevProvider"
 import { ApiConfiguration } from "./shared/api"
 import { ClaudeRequestResult } from "./shared/ClaudeRequestResult"
-import { DEFAULT_MAX_REQUESTS_PER_TASK } from "./shared/Constants"
+import { combineApiRequests } from "./shared/combineApiRequests"
+import { combineCommandSequences, COMMAND_STDIN_STRING } from "./shared/combineCommandSequences"
 import { ClaudeAsk, ClaudeMessage, ClaudeSay, ClaudeSayTool } from "./shared/ExtensionMessage"
-import { Tool, ToolName } from "./shared/Tool"
-import { ClaudeAskResponse } from "./shared/WebviewMessage"
-import delay from "delay"
 import { getApiMetrics } from "./shared/getApiMetrics"
 import { HistoryItem } from "./shared/HistoryItem"
-import { combineApiRequests } from "./shared/combineApiRequests"
-import { combineCommandSequences } from "./shared/combineCommandSequences"
-import { findLastIndex } from "./utils"
-import { isWithinContextWindow, truncateHalfConversation } from "./utils/context-management"
+import { Tool, ToolName } from "./shared/Tool"
+import { ClaudeAskResponse } from "./shared/WebviewMessage"
+import { findLast, findLastIndex } from "./utils"
+import { truncateHalfConversation } from "./utils/context-management"
+import { regexSearchFiles } from "./utils/ripgrep"
+import { extractTextFromFile } from "./utils/extract-text"
+import { getPythonEnvPath } from "./utils/get-python-env"
 
 const SYSTEM_PROMPT =
-	() => `You are Claude Dev, a highly skilled software developer with extensive knowledge in many programming languages, frameworks, design patterns, and best practices.
+	async () => `You are Claude Dev, a highly skilled software developer with extensive knowledge in many programming languages, frameworks, design patterns, and best practices.
 
 ====
  
@@ -38,8 +40,9 @@ CAPABILITIES
 - You can debug complex issues and providing detailed explanations, offering architectural insights and design patterns.
 - You have access to tools that let you execute CLI commands on the user's computer, list files in a directory (top level or recursively), extract source code definitions, read and write files, and ask follow-up questions. These tools help you effectively accomplish a wide range of tasks, such as writing code, making edits or improvements to existing files, understanding the current state of a project, performing system operations, and much more.
 - When the user initially gives you a task, a recursive list of all filepaths in the current working directory ('${cwd}') will be included in potentially_relevant_details. This provides an overview of the project's file structure, offering key insights into the project from directory/file names (how developers conceptualize and organize their code) and file extensions (the language used). This can also guide decision-making on which files to explore further. If you need to further explore directories such as outside the current working directory, you can use the list_files tool. If you pass 'true' for the recursive parameter, it will list files recursively. Otherwise, it will list files at the top level, which is better suited for generic directories where you don't necessarily need the nested structure, like the Desktop.
-- You can use the view_source_code_definitions_top_level tool to get an overview of source code definitions for all files at the top level of a specified directory. This can be particularly useful when you need to understand the broader context and relationships between certain parts of the code. You may need to call this tool multiple times to understand various parts of the codebase related to the task.
-	- For example, when asked to make edits or improvements you might analyze the file structure in the initial potentially_relevant_details to get an overview of the project, then use view_source_code_definitions_top_level to get further insight using source code definitions for files located in relevant directories, then read_file to examine the contents of relevant files, analyze the code and suggest improvements or make necessary edits, then use the write_to_file tool to implement changes.
+- You can use search_files to perform regex searches across files in a specified directory, outputting context-rich results that include surrounding lines. This is particularly useful for understanding code patterns, finding specific implementations, or identifying areas that need refactoring.
+- You can use the list_code_definition_names tool to get an overview of source code definitions for all files at the top level of a specified directory. This can be particularly useful when you need to understand the broader context and relationships between certain parts of the code. You may need to call this tool multiple times to understand various parts of the codebase related to the task.
+	- For example, when asked to make edits or improvements you might analyze the file structure in the initial potentially_relevant_details to get an overview of the project, then use list_code_definition_names to get further insight using source code definitions for files located in relevant directories, then read_file to examine the contents of relevant files, analyze the code and suggest improvements or make necessary edits, then use the write_to_file tool to implement changes. If you refactored code that could affect other parts of the codebase, you could use search_files to ensure you update other files as needed.
 - The execute_command tool lets you run commands on the user's computer and should be used whenever you feel it can help accomplish the user's task. When you need to execute a CLI command, you must provide a clear explanation of what the command does. Prefer to execute complex CLI commands over creating executable scripts, since they are more flexible and easier to run. Interactive and long-running commands are allowed, since the user has the ability to send input to stdin and terminate the command on their own if needed.
 
 ====
@@ -51,12 +54,13 @@ RULES
 - Do not use the ~ character or $HOME to refer to the home directory.
 - Before using the execute_command tool, you must first think about the SYSTEM INFORMATION context provided to understand the user's environment and tailor your commands to ensure they are compatible with their system. You must also consider if the command you need to run should be executed in a specific directory outside of the current working directory '${cwd}', and if so prepend with \`cd\`'ing into that directory && then executing the command (as one command since you are stuck operating from '${cwd}'). For example, if you needed to run \`npm install\` in a project outside of '${cwd}', you would need to prepend with a \`cd\` i.e. pseudocode for this would be \`cd (path to project) && (command, in this case npm install)\`.
 - If you need to read or edit a file you have already read or edited, you can assume its contents have not changed since then (unless specified otherwise by the user) and skip using the read_file tool before proceeding.
+- When using the search_files tool, craft your regex patterns carefully to balance specificity and flexibility. Based on the user's task you may use it to find code patterns, TODO comments, function definitions, or any text-based information across the project. The results include context, so analyze the surrounding code to better understand the matches. Leverage the search_files tool in combination with other tools for more comprehensive analysis. For example, use it to find specific code patterns, then use read_file to examine the full context of interesting matches before using write_to_file to make informed changes.
 - When creating a new project (such as an app, website, or any software project), organize all new files within a dedicated project directory unless the user specifies otherwise. Use appropriate file paths when writing files, as the write_to_file tool will automatically create any necessary directories. Structure the project logically, adhering to best practices for the specific type of project being created. Unless otherwise specified, new projects should be easily run without additional setup, for example most projects can be built in HTML, CSS, and JavaScript - which you can open in a browser.
 - You must try to use multiple tools in one request when possible. For example if you were to create a website, you would use the write_to_file tool to create the necessary files with their appropriate contents all at once. Or if you wanted to analyze a project, you could use the read_file tool multiple times to look at several key files. This will help you accomplish the user's task more efficiently.
 - Be sure to consider the type of project (e.g. Python, JavaScript, web application) when determining the appropriate structure and files to include. Also consider what files may be most relevant to accomplishing the task, for example looking at a project's manifest file would help you understand the project's dependencies, which you could incorporate into any code you write.
 - When making changes to code, always consider the context in which the code is being used. Ensure that your changes are compatible with the existing codebase and that they follow the project's coding standards and best practices.
 - Do not ask for more information than necessary. Use the tools provided to accomplish the user's request efficiently and effectively. When you've completed your task, you must use the attempt_completion tool to present the result to the user. The user may provide feedback, which you can use to make improvements and try again.
-- You are only allowed to ask the user questions using the ask_followup_question tool. Use this tool only when you need additional details to complete a task, and be sure to use a clear and concise question that will help you move forward with the task. However if you can use the available tools to avoid having to ask the user questions, you should do so.
+- You are only allowed to ask the user questions using the ask_followup_question tool. Use this tool only when you need additional details to complete a task, and be sure to use a clear and concise question that will help you move forward with the task. However if you can use the available tools to avoid having to ask the user questions, you should do so. For example, if the user mentions a file that may be in an outside directory like the Desktop, you should use the list_files tool to list the files in the Desktop and check if the file they are talking about is there, rather than asking the user to provide the file path themselves.
 - Your goal is to try to accomplish the user's task, NOT engage in a back and forth conversation.
 - NEVER end completion_attempt with a question or request to engage in further conversation! Formulate the end of your result in a way that is final and does not require further input from the user. 
 - NEVER start your responses with affirmations like "Certainly", "Okay", "Sure", "Great", etc. You should NOT be conversational in your responses, but rather direct and to the point.
@@ -72,7 +76,7 @@ You accomplish a given task iteratively, breaking it down into clear steps and w
 
 1. Analyze the user's task and set clear, achievable goals to accomplish it. Prioritize these goals in a logical order.
 2. Work through these goals sequentially, utilizing available tools as necessary. Each goal should correspond to a distinct step in your problem-solving process. It is okay for certain steps to take multiple iterations, i.e. if you need to create many files but are limited by your max output limitations, it's okay to create a few files at a time as each subsequent iteration will keep you informed on the work completed and what's remaining. 
-3. Remember, you have extensive capabilities with access to a wide range of tools that can be used in powerful and clever ways as necessary to accomplish each goal. Before calling a tool, do some analysis within <thinking></thinking> tags. First, think about which of the provided tools is the relevant tool to answer the user's request. Second, go through each of the required parameters of the relevant tool and determine if the user has directly provided or given enough information to infer a value. When deciding if the parameter can be inferred, carefully consider all the context to see if it supports a specific value. If all of the required parameters are present or can be reasonably inferred, close the thinking tag and proceed with the tool call. BUT, if one of the values for a required parameter is missing, DO NOT invoke the function (not even with fillers for the missing params) and instead, ask the user to provide the missing parameters using the ask_followup_question tool. DO NOT ask for more information on optional parameters if it is not provided.
+3. Remember, you have extensive capabilities with access to a wide range of tools that can be used in powerful and clever ways as necessary to accomplish each goal. Before calling a tool, do some analysis within <thinking></thinking> tags. First, analyze the file structure provided in potentially_relevant_details to gain context and insights for proceeding effectively. Then, think about which of the provided tools is the most relevant tool to accomplish the user's task. Next, go through each of the required parameters of the relevant tool and determine if the user has directly provided or given enough information to infer a value. When deciding if the parameter can be inferred, carefully consider all the context to see if it supports a specific value. If all of the required parameters are present or can be reasonably inferred, close the thinking tag and proceed with the tool call. BUT, if one of the values for a required parameter is missing, DO NOT invoke the function (not even with fillers for the missing params) and instead, ask the user to provide the missing parameters using the ask_followup_question tool. DO NOT ask for more information on optional parameters if it is not provided.
 4. Once you've completed the user's task, you must use the attempt_completion tool to present the result of the task to the user. You may also provide a CLI command to showcase the result of your task; this can be particularly useful for web development tasks, where you can run e.g. \`open index.html\` to show the website you've built.
 5. The user may provide feedback, which you can use to make improvements and try again. But DO NOT continue in pointless back and forth conversations, i.e. don't end your responses with questions or offers for further assistance.
 
@@ -81,7 +85,15 @@ You accomplish a given task iteratively, breaking it down into clear steps and w
 SYSTEM INFORMATION
 
 Operating System: ${osName()}
-Default Shell: ${defaultShell}
+Default Shell: ${defaultShell}${await (async () => {
+		try {
+			const pythonEnvPath = await getPythonEnvPath()
+			if (pythonEnvPath) {
+				return `\nPython Environment: ${pythonEnvPath}`
+			}
+		} catch {}
+		return ""
+	})()}
 Home Directory: ${os.homedir()}
 Current Working Directory: ${cwd}
 `
@@ -127,24 +139,48 @@ const tools: Tool[] = [
 		},
 	},
 	{
-		name: "view_source_code_definitions_top_level",
+		name: "list_code_definition_names",
 		description:
-			"Parse all source code files at the top level of the specified directory to extract names of key elements like classes and functions. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture.",
+			"Lists definition names (classes, functions, methods, etc.) used in source code files at the top level of the specified directory. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture.",
 		input_schema: {
 			type: "object",
 			properties: {
 				path: {
 					type: "string",
-					description: `The path of the directory (relative to the current working directory ${cwd}) to parse top level source code files for to view their definitions`,
+					description: `The path of the directory (relative to the current working directory ${cwd}) to list top level source code definitions for`,
 				},
 			},
 			required: ["path"],
 		},
 	},
 	{
+		name: "search_files",
+		description:
+			"Perform a regex search across files in a specified directory, providing context-rich results. This tool searches for patterns or specific content across multiple files, displaying each match with encapsulating context.",
+		input_schema: {
+			type: "object",
+			properties: {
+				path: {
+					type: "string",
+					description: `The path of the directory to search in (relative to the current working directory ${cwd}). This directory will be recursively searched.`,
+				},
+				regex: {
+					type: "string",
+					description: "The regular expression pattern to search for. Uses Rust regex syntax.",
+				},
+				filePattern: {
+					type: "string",
+					description:
+						"Optional glob pattern to filter files (e.g., '*.ts' for TypeScript files). If not provided, it will search all files (*).",
+				},
+			},
+			required: ["path", "regex"],
+		},
+	},
+	{
 		name: "read_file",
 		description:
-			"Read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file, for example to analyze code, review text files, or extract information from configuration files. Be aware that this tool may not be suitable for very large files or binary files, as it returns the raw content as a string.",
+			"Read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file, for example to analyze code, review text files, or extract information from configuration files. Automatically extracts raw text from PDF and DOCX files. May not be suitable for other types of binary files, as it returns the raw content as a string.",
 		input_schema: {
 			type: "object",
 			properties: {
@@ -222,10 +258,8 @@ type UserContent = Array<
 export class ClaudeDev {
 	readonly taskId: string
 	private api: ApiHandler
-	private maxRequestsPerTask: number
 	private customInstructions?: string
 	private alwaysAllowReadOnly: boolean
-	private requestCount = 0
 	apiConversationHistory: Anthropic.MessageParam[] = []
 	claudeMessages: ClaudeMessage[] = []
 	private askResponse?: ClaudeAskResponse
@@ -233,13 +267,13 @@ export class ClaudeDev {
 	private askResponseImages?: string[]
 	private lastMessageTs?: number
 	private executeCommandRunningProcess?: ResultPromise
+	private shouldSkipNextApiReqStartedMessage = false
 	private providerRef: WeakRef<ClaudeDevProvider>
 	private abort: boolean = false
 
 	constructor(
 		provider: ClaudeDevProvider,
 		apiConfiguration: ApiConfiguration,
-		maxRequestsPerTask?: number,
 		customInstructions?: string,
 		alwaysAllowReadOnly?: boolean,
 		task?: string,
@@ -248,7 +282,6 @@ export class ClaudeDev {
 	) {
 		this.providerRef = new WeakRef(provider)
 		this.api = buildApiHandler(apiConfiguration)
-		this.maxRequestsPerTask = maxRequestsPerTask ?? DEFAULT_MAX_REQUESTS_PER_TASK
 		this.customInstructions = customInstructions
 		this.alwaysAllowReadOnly = alwaysAllowReadOnly ?? false
 
@@ -265,10 +298,6 @@ export class ClaudeDev {
 
 	updateApi(apiConfiguration: ApiConfiguration) {
 		this.api = buildApiHandler(apiConfiguration)
-	}
-
-	updateMaxRequestsPerTask(maxRequestsPerTask: number | undefined) {
-		this.maxRequestsPerTask = maxRequestsPerTask ?? DEFAULT_MAX_REQUESTS_PER_TASK
 	}
 
 	updateCustomInstructions(customInstructions: string | undefined) {
@@ -448,13 +477,34 @@ export class ClaudeDev {
 		this.apiConversationHistory = []
 		await this.providerRef.deref()?.postStateToWebview()
 
-		let textBlock: Anthropic.TextBlockParam = {
-			type: "text",
-			text: `<task>\n${task}\n</task>\n\n${await this.getPotentiallyRelevantDetails(true)}`, // cannot be sent with system prompt since it's cached and these details can change
-		}
-		let imageBlocks: Anthropic.ImageBlockParam[] = this.formatImagesIntoBlocks(images)
 		await this.say("text", task, images)
-		await this.initiateTaskLoop([textBlock, ...imageBlocks])
+
+		// getting verbose details is an expensive operation, it uses globby to top-down build file structure of project which for large projects can take a few seconds
+		// for the best UX we show a loading spinner as this happens
+		const taskText = `<task>\n${task}\n</task>`
+		let imageBlocks: Anthropic.ImageBlockParam[] = this.formatImagesIntoBlocks(images)
+		await this.say(
+			"api_req_started",
+			JSON.stringify({
+				request: this.api.createUserReadableRequest([
+					{
+						type: "text",
+						text: `${taskText}\n\n<potentially_relevant_details>(see getPotentiallyRelevantDetails in src/ClaudeDev.ts)</potentially_relevant_details>`,
+					},
+					...imageBlocks,
+				]),
+			})
+		)
+		this.shouldSkipNextApiReqStartedMessage = true
+		this.getPotentiallyRelevantDetails(true).then(async (verboseDetails) => {
+			await this.initiateTaskLoop([
+				{
+					type: "text",
+					text: `${taskText}\n\n${verboseDetails}`, // cannot be sent with system prompt since it's cached and these details can change
+				},
+				...imageBlocks,
+			])
+		})
 	}
 
 	private async resumeTaskFromHistory() {
@@ -676,16 +726,18 @@ export class ClaudeDev {
 		}
 	}
 
-	async executeTool(toolName: ToolName, toolInput: any, isLastWriteToFile: boolean = false): Promise<ToolResponse> {
+	async executeTool(toolName: ToolName, toolInput: any): Promise<ToolResponse> {
 		switch (toolName) {
 			case "write_to_file":
-				return this.writeToFile(toolInput.path, toolInput.content, isLastWriteToFile)
+				return this.writeToFile(toolInput.path, toolInput.content)
 			case "read_file":
 				return this.readFile(toolInput.path)
 			case "list_files":
 				return this.listFiles(toolInput.path, toolInput.recursive)
-			case "view_source_code_definitions_top_level":
-				return this.viewSourceCodeDefinitionsTopLevel(toolInput.path)
+			case "list_code_definition_names":
+				return this.listCodeDefinitionNames(toolInput.path)
+			case "search_files":
+				return this.searchFiles(toolInput.path, toolInput.regex, toolInput.filePattern)
 			case "execute_command":
 				return this.executeCommand(toolInput.command)
 			case "ask_followup_question":
@@ -719,7 +771,7 @@ export class ClaudeDev {
 		return totalCost
 	}
 
-	async writeToFile(relPath?: string, newContent?: string, isLast: boolean = true): Promise<ToolResponse> {
+	async writeToFile(relPath?: string, newContent?: string): Promise<ToolResponse> {
 		if (relPath === undefined) {
 			await this.say(
 				"error",
@@ -744,77 +796,48 @@ export class ClaudeDev {
 				.then(() => true)
 				.catch(() => false)
 
+			let originalContent: string
 			if (fileExists) {
-				const originalContent = await fs.readFile(absolutePath, "utf-8")
+				originalContent = await fs.readFile(absolutePath, "utf-8")
 				// fix issue where claude always removes newline from the file
-				if (originalContent.endsWith("\n") && !newContent.endsWith("\n")) {
-					newContent += "\n"
+				const eol = originalContent.includes("\r\n") ? "\r\n" : "\n"
+				if (originalContent.endsWith(eol) && !newContent.endsWith(eol)) {
+					newContent += eol
 				}
-				// condensed patch to return to claude
-				const diffResult = diff.createPatch(absolutePath, originalContent, newContent)
-				// full diff representation for webview
-				const diffRepresentation = diff
-					.diffLines(originalContent, newContent)
-					.map((part) => {
-						const prefix = part.added ? "+" : part.removed ? "-" : " "
-						return (part.value || "")
-							.split("\n")
-							.map((line) => (line ? prefix + line : ""))
-							.join("\n")
-					})
-					.join("")
+			} else {
+				originalContent = ""
+			}
 
-				// Create virtual document with new file, then open diff editor
-				const fileName = path.basename(absolutePath)
-				vscode.commands.executeCommand(
-					"vscode.diff",
-					vscode.Uri.file(absolutePath),
-					// to create a virtual doc we use a uri scheme registered in extension.ts, which then converts this base64 content into a text document
-					// (providing file name with extension in the uri lets vscode know the language of the file and apply syntax highlighting)
-					vscode.Uri.parse(`claude-dev-diff:${fileName}`).with({
-						query: Buffer.from(newContent).toString("base64"),
-					}),
-					`${fileName}: Original ↔ Suggested Changes`
-				)
+			// Create a temporary file with the new content
+			const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "claude-dev-"))
+			const tempFilePath = path.join(tempDir, path.basename(absolutePath))
+			await fs.writeFile(tempFilePath, newContent)
 
-				const { response, text, images } = await this.ask(
+			vscode.commands.executeCommand(
+				"vscode.diff",
+				vscode.Uri.parse(`claude-dev-diff:${path.basename(absolutePath)}`).with({
+					query: Buffer.from(originalContent).toString("base64"),
+				}),
+				vscode.Uri.file(tempFilePath),
+				`${path.basename(absolutePath)}: ${fileExists ? "Original ↔ Claude's Changes" : "New File"} (Editable)`
+			)
+
+			let userResponse: {
+				response: ClaudeAskResponse
+				text?: string
+				images?: string[]
+			}
+			if (fileExists) {
+				userResponse = await this.ask(
 					"tool",
 					JSON.stringify({
 						tool: "editedExistingFile",
 						path: this.getReadablePath(relPath),
-						diff: diffRepresentation,
+						diff: this.createPrettyPatch(relPath, originalContent, newContent),
 					} as ClaudeSayTool)
 				)
-				if (response !== "yesButtonTapped") {
-					if (isLast) {
-						await this.closeDiffViews()
-					}
-					if (response === "messageResponse") {
-						await this.say("user_feedback", text, images)
-						return this.formatIntoToolResponse(await this.formatGenericToolFeedback(text), images)
-					}
-					return "The user denied this operation."
-				}
-				await fs.writeFile(absolutePath, newContent)
-				// Finish by opening the edited file in the editor
-				await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: false })
-				if (isLast) {
-					await this.closeDiffViews()
-				}
-				return `Changes applied to ${relPath}:\n${diffResult}`
 			} else {
-				const fileName = path.basename(absolutePath)
-				vscode.commands.executeCommand(
-					"vscode.diff",
-					vscode.Uri.parse(`claude-dev-diff:${fileName}`).with({
-						query: Buffer.from("").toString("base64"),
-					}),
-					vscode.Uri.parse(`claude-dev-diff:${fileName}`).with({
-						query: Buffer.from(newContent).toString("base64"),
-					}),
-					`${fileName}: New File`
-				)
-				const { response, text, images } = await this.ask(
+				userResponse = await this.ask(
 					"tool",
 					JSON.stringify({
 						tool: "newFileCreated",
@@ -822,23 +845,69 @@ export class ClaudeDev {
 						content: newContent,
 					} as ClaudeSayTool)
 				)
-				if (response !== "yesButtonTapped") {
-					if (isLast) {
-						await this.closeDiffViews()
-					}
-					if (response === "messageResponse") {
-						await this.say("user_feedback", text, images)
-						return this.formatIntoToolResponse(await this.formatGenericToolFeedback(text), images)
-					}
-					return "The user denied this operation."
+			}
+			const { response, text, images } = userResponse
+
+			// Save any unsaved changes in the diff editor
+			const diffDocument = vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath === tempFilePath)
+			if (diffDocument && diffDocument.isDirty) {
+				console.log("saving diff document")
+				await diffDocument.save()
+			}
+
+			if (response !== "yesButtonTapped") {
+				await this.closeDiffViews()
+				// Clean up the temporary file
+				try {
+					await fs.rm(tempDir, { recursive: true, force: true })
+				} catch (error) {
+					// deleting temp file failed (seems to happen on some windows machines), which is okay since system will clean it up anyways
+					console.error(`Error deleting temporary directory: ${error}`)
 				}
+				if (response === "messageResponse") {
+					await this.say("user_feedback", text, images)
+					return this.formatIntoToolResponse(await this.formatGenericToolFeedback(text), images)
+				}
+				return "The user denied this operation."
+			}
+
+			// Read the potentially edited content from the temp file
+			const editedContent = await fs.readFile(tempFilePath, "utf-8")
+			if (!fileExists) {
 				await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-				await fs.writeFile(absolutePath, newContent)
-				await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: false })
-				if (isLast) {
-					await this.closeDiffViews()
-				}
-				return `New file created and content written to ${relPath}`
+			}
+			await fs.writeFile(absolutePath, editedContent)
+
+			// Clean up the temporary file
+			try {
+				await fs.rm(tempDir, { recursive: true, force: true })
+			} catch (error) {
+				console.error(`Error deleting temporary directory: ${error}`)
+			}
+
+			// Finish by opening the edited file in the editor
+			await vscode.window.showTextDocument(vscode.Uri.file(absolutePath), { preview: false })
+			await this.closeDiffViews()
+
+			if (editedContent !== newContent) {
+				const diffResult = diff.createPatch(relPath, originalContent, editedContent)
+				const userDiff = diff.createPatch(relPath, newContent, editedContent)
+				await this.say(
+					"user_feedback_diff",
+					JSON.stringify({
+						tool: fileExists ? "editedExistingFile" : "newFileCreated",
+						path: this.getReadablePath(relPath),
+						diff: this.createPrettyPatch(relPath, newContent, editedContent),
+					} as ClaudeSayTool)
+				)
+				return `The user accepted but made the following changes to your content:\n\n${userDiff}\n\nFinal result ${
+					fileExists ? "applied to" : "written as new file"
+				} ${relPath}:\n\n${diffResult}`
+			} else {
+				const diffResult = diff.createPatch(relPath, originalContent, newContent)
+				return `${
+					fileExists ? `Changes applied to ${relPath}:\n\n${diffResult}` : `New file written to ${relPath}`
+				}`
 			}
 		} catch (error) {
 			const errorString = `Error writing file: ${JSON.stringify(serializeError(error))}`
@@ -850,14 +919,26 @@ export class ClaudeDev {
 		}
 	}
 
+	createPrettyPatch(filename = "file", oldStr: string, newStr: string) {
+		const patch = diff.createPatch(filename, oldStr, newStr)
+		const lines = patch.split("\n")
+		const prettyPatchLines = lines.slice(4)
+		return prettyPatchLines.join("\n")
+	}
+
 	async closeDiffViews() {
 		const tabs = vscode.window.tabGroups.all
 			.map((tg) => tg.tabs)
 			.flat()
-			.filter(
-				(tab) =>
-					tab.input instanceof vscode.TabInputTextDiff && tab.input?.modified?.scheme === "claude-dev-diff"
-			)
+			.filter((tab) => {
+				if (tab.input instanceof vscode.TabInputTextDiff) {
+					const originalPath = (tab.input.original as vscode.Uri).toString()
+					const modifiedPath = (tab.input.modified as vscode.Uri).toString()
+					return originalPath.includes("claude-dev-") || modifiedPath.includes("claude-dev-")
+				}
+				return false
+			})
+
 		for (const tab of tabs) {
 			await vscode.window.tabGroups.close(tab)
 		}
@@ -873,7 +954,7 @@ export class ClaudeDev {
 		}
 		try {
 			const absolutePath = path.resolve(cwd, relPath)
-			const content = await fs.readFile(absolutePath, "utf-8")
+			const content = await extractTextFromFile(absolutePath)
 
 			const message = JSON.stringify({
 				tool: "readFile",
@@ -977,20 +1058,30 @@ export class ClaudeDev {
 				const relativePath = path.relative(absolutePath, file)
 				return file.endsWith("/") ? relativePath + "/" : relativePath
 			})
+			// Sort so files are listed under their respective directories to make it clear what files are children of what directories. Since we build file list top down, even if file list is truncated it will show directories that claude can then explore further.
 			.sort((a, b) => {
-				// sort directories before files
-				const aIsDir = a.endsWith("/")
-				const bIsDir = b.endsWith("/")
-				if (aIsDir !== bIsDir) {
-					return aIsDir ? -1 : 1
+				const aParts = a.split("/")
+				const bParts = b.split("/")
+				for (let i = 0; i < Math.min(aParts.length, bParts.length); i++) {
+					if (aParts[i] !== bParts[i]) {
+						// If one is a directory and the other isn't at this level, sort the directory first
+						if (i + 1 === aParts.length && i + 1 < bParts.length) {
+							return -1
+						}
+						if (i + 1 === bParts.length && i + 1 < aParts.length) {
+							return 1
+						}
+						// Otherwise, sort alphabetically
+						return aParts[i].localeCompare(bParts[i], undefined, { numeric: true, sensitivity: "base" })
+					}
 				}
-				return a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" })
+				// If all parts are the same up to the length of the shorter path,
+				// the shorter one comes first
+				return aParts.length - bParts.length
 			})
-
-		if (sorted.length > 1000) {
-			const truncatedList = sorted.slice(0, 1000).join("\n")
-			const remainingCount = sorted.length - 1000
-			return `${truncatedList}\n\n(${remainingCount} files not listed due to automatic truncation. Try listing files in subdirectories if you need to explore further.)`
+		if (sorted.length >= LIST_FILES_LIMIT) {
+			const truncatedList = sorted.slice(0, LIST_FILES_LIMIT).join("\n")
+			return `${truncatedList}\n\n(Truncated at ${LIST_FILES_LIMIT} results. Try listing files in subdirectories if you need to explore further.)`
 		} else if (sorted.length === 0 || (sorted.length === 1 && sorted[0] === "")) {
 			return "No files found or you do not have permission to view this directory."
 		} else {
@@ -998,11 +1089,11 @@ export class ClaudeDev {
 		}
 	}
 
-	async viewSourceCodeDefinitionsTopLevel(relDirPath?: string): Promise<ToolResponse> {
+	async listCodeDefinitionNames(relDirPath?: string): Promise<ToolResponse> {
 		if (relDirPath === undefined) {
 			await this.say(
 				"error",
-				"Claude tried to use view_source_code_definitions_top_level without value for required parameter 'path'. Retrying..."
+				"Claude tried to use list_code_definition_names without value for required parameter 'path'. Retrying..."
 			)
 			return "Error: Missing value for required parameter 'path'. Please retry with complete response."
 		}
@@ -1011,7 +1102,7 @@ export class ClaudeDev {
 			const result = await parseSourceCodeForDefinitionsTopLevel(absolutePath)
 
 			const message = JSON.stringify({
-				tool: "viewSourceCodeDefinitionsTopLevel",
+				tool: "listCodeDefinitionNames",
 				path: this.getReadablePath(relDirPath),
 				content: result,
 			} as ClaudeSayTool)
@@ -1041,6 +1132,59 @@ export class ClaudeDev {
 		}
 	}
 
+	async searchFiles(relDirPath: string, regex: string, filePattern?: string): Promise<ToolResponse> {
+		if (relDirPath === undefined) {
+			await this.say(
+				"error",
+				"Claude tried to use search_files without value for required parameter 'path'. Retrying..."
+			)
+			return "Error: Missing value for required parameter 'path'. Please retry with complete response."
+		}
+
+		if (regex === undefined) {
+			await this.say(
+				"error",
+				`Claude tried to use search_files without value for required parameter 'regex'. Retrying...`
+			)
+			return "Error: Missing value for required parameter 'regex'. Please retry with complete response."
+		}
+
+		try {
+			const absolutePath = path.resolve(cwd, relDirPath)
+			const results = await regexSearchFiles(cwd, absolutePath, regex, filePattern)
+
+			const message = JSON.stringify({
+				tool: "searchFiles",
+				path: this.getReadablePath(relDirPath),
+				regex: regex,
+				filePattern: filePattern,
+				content: results,
+			} as ClaudeSayTool)
+
+			if (this.alwaysAllowReadOnly) {
+				await this.say("tool", message)
+			} else {
+				const { response, text, images } = await this.ask("tool", message)
+				if (response !== "yesButtonTapped") {
+					if (response === "messageResponse") {
+						await this.say("user_feedback", text, images)
+						return this.formatIntoToolResponse(await this.formatGenericToolFeedback(text), images)
+					}
+					return "The user denied this operation."
+				}
+			}
+
+			return results
+		} catch (error) {
+			const errorString = `Error searching files: ${JSON.stringify(serializeError(error))}`
+			await this.say(
+				"error",
+				`Error searching files:\n${error.message ?? JSON.stringify(serializeError(error), null, 2)}`
+			)
+			return errorString
+		}
+	}
+
 	async executeCommand(command?: string, returnEmptyStringOnSuccess: boolean = false): Promise<ToolResponse> {
 		if (command === undefined) {
 			await this.say(
@@ -1058,9 +1202,11 @@ export class ClaudeDev {
 			return "The user denied this operation."
 		}
 
+		let userFeedback: { text?: string; images?: string[] } | undefined
 		const sendCommandOutput = async (subprocess: ResultPromise, line: string): Promise<void> => {
 			try {
-				const { response, text } = await this.ask("command_output", line)
+				const { response, text, images } = await this.ask("command_output", line)
+				const isStdin = (text ?? "").startsWith(COMMAND_STDIN_STRING)
 				// if this ask promise is not ignored, that means the user responded to it somehow either by clicking primary button or by typing text
 				if (response === "yesButtonTapped") {
 					// SIGINT is typically what's sent when a user interrupts a process (like pressing Ctrl+C)
@@ -1074,12 +1220,27 @@ export class ClaudeDev {
 						treeKill(subprocess.pid, "SIGINT")
 					}
 				} else {
-					// if the user sent some input, we send it to the command stdin
-					// add newline as cli programs expect a newline after each input
-					// (stdin needs to be set to `pipe` to send input to the command, execa does this by default when using template literals - other options are inherit (from parent process stdin) or null (no stdin))
-					subprocess.stdin?.write(text + "\n")
-					// Recurse with an empty string to continue listening for more input
-					sendCommandOutput(subprocess, "") // empty strings are effectively ignored by the webview, this is done solely to relinquish control over the exit command button
+					if (isStdin) {
+						const stdin = text?.slice(COMMAND_STDIN_STRING.length) ?? ""
+
+						// replace last commandoutput with + stdin
+						const lastCommandOutput = findLastIndex(this.claudeMessages, (m) => m.ask === "command_output")
+						if (lastCommandOutput !== -1) {
+							this.claudeMessages[lastCommandOutput].text += stdin
+						}
+
+						// if the user sent some input, we send it to the command stdin
+						// add newline as cli programs expect a newline after each input
+						// (stdin needs to be set to `pipe` to send input to the command, execa does this by default when using template literals - other options are inherit (from parent process stdin) or null (no stdin))
+						subprocess.stdin?.write(stdin + "\n")
+						// Recurse with an empty string to continue listening for more input
+						sendCommandOutput(subprocess, "") // empty strings are effectively ignored by the webview, this is done solely to relinquish control over the exit command button
+					} else {
+						userFeedback = { text, images }
+						if (subprocess.pid) {
+							treeKill(subprocess.pid, "SIGINT")
+						}
+					}
 				}
 			} catch {
 				// This can only happen if this ask promise was ignored, so ignore this error
@@ -1114,7 +1275,7 @@ export class ClaudeDev {
 				// }
 			} catch (e) {
 				if ((e as ExecaError).signal === "SIGINT") {
-					await this.say("command_output", `\nUser exited command...`)
+					//await this.say("command_output", `\nUser exited command...`)
 					result += `\n====\nUser terminated command process via SIGINT. This is not an error. Please continue with your task, but keep in mind that the command is no longer running. For example, if this command was used to start a server for a react app, the server is no longer running and you cannot open a browser to view it anymore.`
 				} else {
 					throw e // if the command was not terminated by user, let outer catch handle it as a real error
@@ -1127,11 +1288,22 @@ export class ClaudeDev {
 			// grouping command_output messages despite any gaps anyways)
 			await delay(100)
 			this.executeCommandRunningProcess = undefined
+
+			if (userFeedback) {
+				await this.say("user_feedback", userFeedback.text, userFeedback.images)
+				return this.formatIntoToolResponse(
+					`Command Output:\n${result}\n\nThe user interrupted the command and provided the following feedback:\n<feedback>\n${
+						userFeedback.text
+					}\n</feedback>\n\n${await this.getPotentiallyRelevantDetails()}`,
+					userFeedback.images
+				)
+			}
+
 			// for attemptCompletion, we don't want to return the command output
 			if (returnEmptyStringOnSuccess) {
 				return ""
 			}
-			return `Command Output:\n${result}`
+			return `Command executed.${result.length > 0 ? `\nOutput:\n${result}` : ""}`
 		} catch (e) {
 			const error = e as any
 			let errorMessage = error.message || JSON.stringify(serializeError(error), null, 2)
@@ -1188,7 +1360,7 @@ export class ClaudeDev {
 
 	async attemptApiRequest(): Promise<Anthropic.Messages.Message> {
 		try {
-			let systemPrompt = SYSTEM_PROMPT()
+			let systemPrompt = await SYSTEM_PROMPT()
 			if (this.customInstructions && this.customInstructions.trim()) {
 				// altering the system prompt mid-task will break the prompt cache, but in the grand scheme this will not change often so it's better to not pollute user messages with it the way we have to with <potentially relevant details>
 				systemPrompt += `
@@ -1201,15 +1373,25 @@ The following additional instructions are provided by the user. They should be f
 ${this.customInstructions.trim()}
 `
 			}
-			const isPromptWithinContextWindow = isWithinContextWindow(
-				this.api.getModel().info.contextWindow,
-				systemPrompt,
-				tools,
-				this.apiConversationHistory
-			)
-			if (!isPromptWithinContextWindow) {
-				const truncatedMessages = truncateHalfConversation(this.apiConversationHistory)
-				await this.overwriteApiConversationHistory(truncatedMessages)
+
+			// If the last API request's total token usage is close to the context window, truncate the conversation history to free up space for the new request
+			const lastApiReqFinished = findLast(this.claudeMessages, (m) => m.say === "api_req_finished")
+			if (lastApiReqFinished && lastApiReqFinished.text) {
+				const {
+					tokensIn,
+					tokensOut,
+					cacheWrites,
+					cacheReads,
+				}: { tokensIn?: number; tokensOut?: number; cacheWrites?: number; cacheReads?: number } = JSON.parse(
+					lastApiReqFinished.text
+				)
+				const totalTokens = (tokensIn || 0) + (tokensOut || 0) + (cacheWrites || 0) + (cacheReads || 0)
+				const contextWindow = this.api.getModel().info.contextWindow
+				const maxAllowedSize = Math.max(contextWindow - 40_000, contextWindow * 0.8)
+				if (totalTokens >= maxAllowedSize) {
+					const truncatedMessages = truncateHalfConversation(this.apiConversationHistory)
+					await this.overwriteApiConversationHistory(truncatedMessages)
+				}
 			}
 			const { message, userCredits } = await this.api.createMessage(
 				systemPrompt,
@@ -1241,38 +1423,20 @@ ${this.customInstructions.trim()}
 		}
 
 		await this.addToApiConversationHistory({ role: "user", content: userContent })
-		if (this.requestCount >= this.maxRequestsPerTask) {
-			const { response } = await this.ask(
-				"request_limit_reached",
-				`Claude Dev has reached the maximum number of requests for this task. Would you like to reset the count and allow him to proceed?`
-			)
 
-			if (response === "yesButtonTapped") {
-				this.requestCount = 0
-			} else {
-				await this.addToApiConversationHistory({
-					role: "assistant",
-					content: [
-						{
-							type: "text",
-							text: "Failure: I have reached the request limit for this task. Do you have a new task for me?",
-						},
-					],
+		if (!this.shouldSkipNextApiReqStartedMessage) {
+			await this.say(
+				"api_req_started",
+				// what the user sees in the webview
+				JSON.stringify({
+					request: this.api.createUserReadableRequest(userContent),
 				})
-				return { didEndLoop: true, inputTokens: 0, outputTokens: 0 }
-			}
+			)
+		} else {
+			this.shouldSkipNextApiReqStartedMessage = false
 		}
-
-		// what the user sees in the webview
-		await this.say(
-			"api_req_started",
-			JSON.stringify({
-				request: this.api.createUserReadableRequest(userContent),
-			})
-		)
 		try {
 			const response = await this.attemptApiRequest()
-			this.requestCount++
 
 			if (this.abort) {
 				throw new Error("ClaudeDev instance aborted")
@@ -1313,10 +1477,6 @@ ${this.customInstructions.trim()}
 
 			let toolResults: Anthropic.ToolResultBlockParam[] = []
 			let attemptCompletionBlock: Anthropic.Messages.ToolUseBlock | undefined
-			const writeToFileCount = response.content.filter(
-				(block) => block.type === "tool_use" && (block.name as ToolName) === "write_to_file"
-			).length
-			let currentWriteToFile = 0
 			for (const contentBlock of response.content) {
 				if (contentBlock.type === "tool_use") {
 					assistantResponses.push(contentBlock)
@@ -1326,15 +1486,8 @@ ${this.customInstructions.trim()}
 					if (toolName === "attempt_completion") {
 						attemptCompletionBlock = contentBlock
 					} else {
-						if (toolName === "write_to_file") {
-							currentWriteToFile++
-						}
 						// NOTE: while anthropic sdk accepts string or array of string/image, openai sdk (openrouter) only accepts a string
-						const result = await this.executeTool(
-							toolName,
-							toolInput,
-							currentWriteToFile === writeToFileCount
-						)
+						const result = await this.executeTool(toolName, toolInput)
 						// this.say(
 						// 	"tool",
 						// 	`\nTool Used: ${toolName}\nTool Input: ${JSON.stringify(toolInput)}\nTool Result: ${result}`
@@ -1433,9 +1586,14 @@ ${
 `
 
 		if (verbose) {
-			const files = await listFiles(cwd, true)
+			const isDesktop = cwd === path.join(os.homedir(), "Desktop")
+			const files = await listFiles(cwd, !isDesktop)
 			const result = this.formatFilesList(cwd, files)
-			details += `\n# Current Working Directory Project Structure:\n${result}\n`
+			details += `\n# Current Working Directory ('${cwd}') File Structure:${
+				isDesktop
+					? "\n(Desktop so only top-level contents shown for brevity, use list_files to explore further if necessary)"
+					: ""
+			}:\n${result}\n`
 		}
 
 		details += "</potentially_relevant_details>"
