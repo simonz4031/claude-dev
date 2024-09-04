@@ -4,8 +4,6 @@ import { AnthropicHandler } from "./anthropic"
 import { AwsBedrockHandler } from "./bedrock"
 import { OpenRouterHandler } from "./openrouter"
 import { VertexHandler } from "./vertex"
-import { CustomOpenAIHandler } from "./customOpenAI"
-import { GeminiHandler } from "./gemini"
 
 export interface ApiHandlerMessageResponse {
 	message: Anthropic.Messages.Message
@@ -42,10 +40,6 @@ export function buildApiHandler(configuration: ApiConfiguration): ApiHandler {
 			return new AwsBedrockHandler(options)
 		case "vertex":
 			return new VertexHandler(options)
-		case "customOpenAI":
-			return new CustomOpenAIHandler(options)
-		case "gemini":
-			return new GeminiHandler(options)
 		default:
 			return new AnthropicHandler(options)
 	}
