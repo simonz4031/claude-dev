@@ -9,7 +9,7 @@ import { useExtensionState } from "../context/ExtensionStateContext"
 import { validateApiConfiguration } from "../utils/validate"
 import { vscode } from "../utils/vscode"
 import ApiOptions from "./ApiOptions"
-
+import { buildInfo } from "../buildInfo.js"
 const IS_DEV = false // FIXME: use flags when packaging
 
 type SettingsViewProps = {
@@ -160,7 +160,9 @@ const SettingsView = ({ onDone }: SettingsViewProps) => {
 							https://github.com/saoudrizwan/claude-dev
 						</VSCodeLink>
 					</p>
-					<p style={{ fontStyle: "italic", margin: "10px 0 0 0", padding: 0 }}>v{version}</p>
+					<p style={{ fontStyle: "italic", margin: "10px 0 0 0", padding: 0 }}>
+						v{version} - build: {buildInfo.buildNumber} - {buildInfo.buildTimestamp}
+					</p>
 				</div>
 			</div>
 		</div>

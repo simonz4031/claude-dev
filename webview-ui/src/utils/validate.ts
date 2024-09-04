@@ -18,6 +18,17 @@ export function validateApiConfiguration(apiConfiguration?: ApiConfiguration): s
 					return "You must provide a valid API key or choose a different provider."
 				}
 				break
+
+			case "customOpenAI":
+				if ( !apiConfiguration.customOpenAIBaseUrl || !apiConfiguration.customOpenAIApiKey ) {
+					return "You must provide a valid API key and base URL."
+				}
+				break
+			case "gemini":
+				if (!apiConfiguration.geminiApiKey) {
+					return "You must provide a valid Google Gemini API key."
+				}
+				break
 			case "vertex":
 				if (!apiConfiguration.vertexProjectId || !apiConfiguration.vertexRegion) {
 					return "You must provide a valid Google Cloud Project ID and Region."

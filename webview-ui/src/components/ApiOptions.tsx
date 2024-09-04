@@ -12,6 +12,10 @@ import {
 	openRouterModels,
 	vertexDefaultModelId,
 	vertexModels,
+	geminiDefaultModelId,
+	geminiModels,
+	customOpenAIDefaultModelId,
+	customOpenAIModels,
 } from "../../../src/shared/api"
 import { useExtensionState } from "../context/ExtensionStateContext"
 
@@ -73,6 +77,8 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiErrorMessa
 					<VSCodeOption value="bedrock">AWS Bedrock</VSCodeOption>
 					<VSCodeOption value="openrouter">OpenRouter</VSCodeOption>
 					<VSCodeOption value="vertex">GCP Vertex AI</VSCodeOption>
+					<VSCodeOption value="customOpenAI">Custom OpenAI</VSCodeOption>
+					<VSCodeOption value="gemini">Google Gemini</VSCodeOption>
 				</VSCodeDropdown>
 			</div>
 
@@ -242,34 +248,85 @@ const ApiOptions: React.FC<ApiOptionsProps> = ({ showModelOptions, apiErrorMessa
 						</VSCodeLink>
 					</p>
 				</div>
-			)}
+			)}{selectedProvider === "customOpenAI" && (
+			<div>
+				<VSCodeTextField
+					value={apiConfiguration?.customOpenAIBaseUrl || ""}
+					style={{ width: "100%" }}
+					onInput={handleInputChange("customOpenAIBaseUrl")}
+					placeholder="Enter API Base URL...">
+					<span style={{ fontWeight: 500 }}>Custom OpenAI Base URL</span>
+				</VSCodeTextField>
+				<VSCodeTextField
+					value={apiConfiguration?.customOpenAIApiKey || ""}
+					style={{ width: "100%", marginTop: "10px" }}
+					onInput={handleInputChange("customOpenAIApiKey")}
+					placeholder="Enter API Key...">
+					<span style={{ fontWeight: 500 }}>Custom OpenAI API Key</span>
+				</VSCodeTextField>
+				<p style={{
+					fontSize: "12px",
+					marginTop: "5px",
+					color: "var(--vscode-descriptionForeground)",
+				}}>
+					These settings are stored locally and only used to make API requests from this extension.
+				</p>
+			</div>
+		)}
 
-			{apiErrorMessage && (
+		{selectedProvider === "gemini" && (
+			<div>
+				<VSCodeTextField
+					value={apiConfiguration?.geminiApiKey || ""}
+					style={{ width: "100%" }}
+					onInput={handleInputChange("geminiApiKey")}
+					placeholder="Enter API Key...">
+					<span style={{ fontWeight: 500 }}>Google Gemini API Key</span>
+				</VSCodeTextField>
 				<p
 					style={{
-						margin: "-10px 0 4px 0",
-						fontSize: 12,
-						color: "var(--vscode-errorForeground)",
+						fontSize: "12px",
+						marginTop: "5px",
+						color: "var(--vscode-descriptionForeground)",
 					}}>
-					{apiErrorMessage}
+					This key is stored locally and only used to make API requests from this extension.
+					<VSCodeLink href="https://makersuite.google.com/app/apikey" style={{ display: "inline" }}>
+						You can get a Google Gemini API key here.
+					</VSCodeLink>
 				</p>
-			)}
+			</div>
+		)}
 
-			{showModelOptions && (
-				<>
-					<div className="dropdown-container">
-						<label htmlFor="model-id">
-							<span style={{ fontWeight: 500 }}>Model</span>
-						</label>
-						{selectedProvider === "anthropic" && createDropdown(anthropicModels)}
-						{selectedProvider === "openrouter" && createDropdown(openRouterModels)}
-						{selectedProvider === "bedrock" && createDropdown(bedrockModels)}
+
+		{apiErrorMessage && (
+			<p
+				style={{
+					margin: "-10px 0 4px 0",
+					fontSize: 12,
+					color: "var(--vscode-errorForeground)",
+				}}>
+				{apiErrorMessage}
+			</p>
+		)}
+
+
+		{showModelOptions && (
+			<>
+				<div className="dropdown-container">
+					<label htmlFor="model-id">
+						<span style={{ fontWeight: 500 }}>Model</span>
+					</label>
+					{selectedProvider === "anthropic" && createDropdown(anthropicModels)}
+					{selectedProvider === "openrouter" && createDropdown(openRouterModels)}
+					{selectedProvider === "bedrock" && createDropdown(bedrockModels)}
 						{selectedProvider === "vertex" && createDropdown(vertexModels)}
-					</div>
+						{selectedProvider === "customOpenAI" && createDropdown(customOpenAIModels)}
+						{selectedProvider === "gemini" && createDropdown(geminiModels)}
+				</div>
 
-					<ModelInfoView modelInfo={selectedModelInfo} />
-				</>
-			)}
+				<ModelInfoView modelInfo={selectedModelInfo} />
+			</>
+		)}
 		</div>
 	)
 }
@@ -370,6 +427,10 @@ export function normalizeApiConfiguration(apiConfiguration?: ApiConfiguration) {
 			return getProviderData(bedrockModels, bedrockDefaultModelId)
 		case "vertex":
 			return getProviderData(vertexModels, vertexDefaultModelId)
+		case "customOpenAI":
+			return getProviderData(customOpenAIModels, customOpenAIDefaultModelId)
+		case "gemini":
+			return getProviderData(geminiModels, geminiDefaultModelId)
 		default:
 			return getProviderData(anthropicModels, anthropicDefaultModelId)
 	}
